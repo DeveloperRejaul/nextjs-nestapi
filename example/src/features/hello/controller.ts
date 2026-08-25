@@ -2,7 +2,11 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
+  AuthGuard,
+  CurrentUser,
+  Response,
   ApiTags,
   ApiOperation,
   ApiResponse,
@@ -30,5 +34,18 @@ export class HelloController {
   @Post("")
   create(@Body(CreateHelloDto) dto: CreateHelloDto) {
     return { created: dto };
+  }
+
+  @ApiOperation({ summary: "Admin-only route, demonstrates @AuthGuard/@CurrentUser" })
+  @AuthGuard(["ADMIN"])
+  @Get("/secure/whoami")
+  whoami(@CurrentUser() user: { id: string; role: string }) {
+    return Response.Ok(user);
+  }
+
+  @ApiOperation({ summary: "Demonstrates Response.NoContent()" })
+  @Delete("/:id")
+  remove() {
+    return Response.NoContent();
   }
 }

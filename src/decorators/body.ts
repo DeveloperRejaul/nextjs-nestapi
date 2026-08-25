@@ -1,27 +1,8 @@
 import { plainToInstance } from "class-transformer";
 import { validate, ValidationError } from "class-validator";
 import { Response } from "../utils/Response";
-import type { RouteContext } from "../utils/types";
-import { registerParam } from "./param-registry";
+import { isRouteContext, registerParam } from "./param-registry";
 import { registerBodyDto } from "./openapi-registry";
-
-/*
- * A RouteContext (passed by the @Get/@Post auto-registered
- * API routes) is duck-typed here so @Body() works whether the
- * method is called directly (server action: `controller.create(dto)`,
- * raw payload) or through the route registry
- * (`controller[handler](context)`, RouteContext).
- */
-function isRouteContext(value: any): value is RouteContext {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    "request" in value &&
-    "params" in value &&
-    "query" in value &&
-    typeof value.json === "function"
-  );
-}
 
 function formatValidationErrors(errors: ValidationError[]) {
   return errors.map((error) => ({

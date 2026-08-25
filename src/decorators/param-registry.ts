@@ -9,6 +9,8 @@
  * wrapping once, per method.
  */
 
+import type { RouteContext } from "../utils/types";
+
 export type ParamResolveResult =
   | { success: true; value: any }
   | { success: false; response: any };
@@ -16,6 +18,22 @@ export type ParamResolveResult =
 export type ParamResolver = (
   rawInput: any
 ) => Promise<ParamResolveResult> | ParamResolveResult;
+
+/*
+ * Shared by @Body() and @CurrentUser() to tell apart their two call
+ * shapes: a RouteContext (API-route dispatch) vs. a plain payload/no
+ * argument at all (bound-and-called-directly as a Server Action).
+ */
+export function isRouteContext(value: unknown): value is RouteContext {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "request" in value &&
+    "params" in value &&
+    "query" in value &&
+    typeof (value as { json?: unknown }).json === "function"
+  );
+}
 
 interface ParamEntry {
   index: number;

@@ -21,6 +21,7 @@ a single catch-all `route.ts`. Ships with a CLI to scaffold new projects and fea
   - [Controllers & routing](#controllers--routing)
   - [Route parameters](#route-parameters)
   - [DTO validation](#dto-validation)
+  - [Authentication guards](#authentication-guards)
   - [Middleware](#middleware)
   - [Application configuration](#application-configuration)
   - [Handler return values](#handler-return-values)
@@ -52,6 +53,7 @@ framework running alongside Next.js. One catch-all route dispatches to plain
 
 - **Decorator-based routing** — `@Controller`, `@Get`/`@Post`/`@Put`/`@Patch`/`@Delete`/`@Head`/`@Options`/`@All`, with Express-style `:param` path segments.
 - **DTO validation** — `@Body(DtoClass)` parses and validates the JSON request body with `class-validator`/`class-transformer`, and returns a structured validation-error response automatically on failure.
+- **Authentication guards** — `@AuthGuard(roles?)` + `@CurrentUser()`, backed by one `configureAuth({ resolveUser })` call — no bundled strategy, no DI container.
 - **Middleware** — global (`app.use`) and per-route (`@Use`), composed around the handler in order.
 - **One catch-all route** — a single `app/api/[[...route]]/route.ts` dispatches to every controller; no per-endpoint route files to maintain.
 - **OpenAPI / Swagger docs** — `@ApiTags`/`@ApiOperation`/`@ApiResponse` plus `generateOpenApiDocument()` build a spec straight from your decorators and DTOs; `createSwaggerUiHandler()` serves the Swagger UI from your own `node_modules` — no vendored assets, no CDN.
@@ -208,6 +210,10 @@ export class PostController {
 common cases. Path segments prefixed with `:` (e.g. `/:id`) are captured into
 `context.params`.
 
+Routes are matched in **declaration order**, first match wins (no static-vs-dynamic
+prioritization) — a literal route like `@Get("/search")` needs to be declared *before* a
+colliding `@Get("/:id")` on the same controller, or `:id` will swallow it first.
+
 ### Route parameters
 
 A route method receives a single `RouteContext` argument (unless you're using `@Body`,
@@ -247,11 +253,12 @@ create(@Body(CreateHelloDto) dto: CreateHelloDto) {
 ```
 
 On validation failure, the route short-circuits and returns a structured error payload
-without your handler running:
+(HTTP 400) without your handler running:
 
 ```json
 {
   "success": false,
+  "statusCode": 400,
   "message": "Validation failed",
   "errors": [{ "field": "age", "message": "age must not be less than 0" }]
 }
@@ -259,6 +266,106 @@ without your handler running:
 
 File/`FileList` fields on the parsed body are preserved as-is (not passed through
 `class-transformer`'s type coercion), so file-upload DTOs work without extra config.
+
+#### Server Action validation
+
+A `@Body(DtoClass)`-decorated method also works when bound and exported as a
+[Next.js Server Action](https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations),
+called directly with a plain object instead of a `RouteContext`. That is, **action
+validation** works out of the box, no extra setup needed:
+
+```ts
+// src/features/student/controller.ts
+@Controller("/students")
+export class StudentController {
+  @Post("")
+  create(@Body(CreateStudentDto) dto: CreateStudentDto) {
+    return this.service.create(dto);
+  }
+}
+
+export const studentController = new StudentController();
+```
+
+```ts
+// src/app/dashboard/actions.ts
+"use server";
+
+import { studentController } from "@/features/student/controller";
+
+export const createStudent = studentController.create.bind(studentController);
+```
+
+```ts
+// client component
+const result = await createStudent({ name: "Sam", age: -5 });
+
+if (!result.success) {
+  // same { success: false, message, errors } shape as a failed API-route call
+  console.log(result.errors);
+}
+```
+
+`@Body` detects the call shape automatically — a `RouteContext` argument (has
+`request`/`params`/`query` and a `.json()` method) is read as a route request, anything
+else is treated as the raw payload. Bind with `.bind(controllerInstance)` so `this`
+resolves correctly when Next.js invokes it as a Server Action.
+
+### Authentication guards
+
+`@AuthGuard()` and `@CurrentUser()` — NestJS-style route protection, without a DI container
+or a bundled auth strategy. Register **one** resolver, once, telling the library how to turn
+a request into a user; the library handles the 401/403 short-circuiting and the injection:
+
+```ts
+// app.ts
+import { configureAuth } from "nextjs-nestapi";
+import jwt from "jsonwebtoken";
+
+configureAuth({
+  resolveUser: async (context) => {
+    const token = context.request.headers.get("authorization")?.replace("Bearer ", "");
+    if (!token) return null;
+
+    try {
+      const payload = jwt.verify(token, process.env.JWT_SECRET!) as { id: string; role: string };
+      return payload; // becomes the object @CurrentUser() injects
+    } catch {
+      return null;
+    }
+  },
+});
+```
+
+Then guard routes and inject the resolved user:
+
+```ts
+import { Controller, Get, Post, AuthGuard, CurrentUser } from "nextjs-nestapi";
+
+@Controller("/orders")
+export class OrderController {
+  @AuthGuard() // any authenticated user
+  @Get("")
+  list(@CurrentUser() user: { id: string; role: string }) {
+    return { orders: findOrdersFor(user.id) };
+  }
+
+  @AuthGuard(["ADMIN"]) // must be authenticated AND have this role
+  @Post("/refund")
+  refund(@CurrentUser() user: { id: string; role: string }) {
+    return { refundedBy: user.id };
+  }
+}
+```
+
+- No `resolveUser` call → `Response.Unauthorized()` (HTTP 401), handler never runs.
+- Resolved user's `role` isn't in the list → `Response.Forbidden()` (HTTP 403).
+- `@AuthGuard()` is sugar over [`@Use`](#middleware) — it runs as part of the same middleware
+  chain, before `@Body`/`@CurrentUser` parameter resolution starts.
+- `@CurrentUser()` reuses the same request's already-resolved user instead of calling
+  `resolveUser` a second time when both decorators are on the same method; used alone
+  (no `@AuthGuard`) it never blocks — it resolves to `null` for anonymous requests, for
+  routes where login is optional.
 
 ### Middleware
 
@@ -291,6 +398,179 @@ export class HelloController {
 }
 ```
 
+#### Real-world examples
+
+**1. Authentication + roles** — use the built-in [`@AuthGuard`](#authentication-guards)
+instead of hand-rolling this as middleware:
+
+```ts
+@Controller("/orders")
+export class OrderController {
+  @AuthGuard(["ADMIN"])
+  @Get("")
+  list(@CurrentUser() user: { id: string; role: string }) {
+    return { orders: [] };
+  }
+}
+```
+
+**2. Request timing + logging** — global middleware wraps `next()`, so it can inspect the
+response on the way back out, not just the request on the way in:
+
+```ts
+app.use(async (context, next) => {
+  const start = Date.now();
+  const response = await next();
+  console.log(`${context.request.method} ${context.request.url} - ${Date.now() - start}ms`);
+  return response;
+});
+```
+
+**3. CORS headers:**
+
+```ts
+app.use(async (context, next) => {
+  if (context.request.method === "OPTIONS") {
+    return context.json(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      },
+    });
+  }
+
+  const response = await next();
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  return response;
+});
+```
+
+**4. Rate limiting** (in-memory, per IP — swap the `Map` for Redis in a multi-instance
+deployment):
+
+```ts
+const hits = new Map<string, { count: number; resetAt: number }>();
+
+app.use(async (context, next) => {
+  const ip = context.request.headers.get("x-forwarded-for") ?? "unknown";
+  const now = Date.now();
+  const entry = hits.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    hits.set(ip, { count: 1, resetAt: now + 60_000 });
+  } else if (entry.count >= 100) {
+    return Response.TooManyRequests("Rate limit exceeded, try again later"); // -> HTTP 429
+  } else {
+    entry.count += 1;
+  }
+
+  return next();
+});
+```
+
+**5. API key check** (server-to-server / public API routes, separate from user auth):
+
+```ts
+import { Use, Response } from "nextjs-nestapi";
+
+function requireApiKey() {
+  return async (context: RouteContext, next: () => Promise<any>) => {
+    const key = context.request.headers.get("x-api-key");
+    if (!key || !(await isValidApiKey(key))) {
+      return Response.Unauthorized("Invalid API key");
+    }
+    return next();
+  };
+}
+
+@Controller("/webhooks")
+export class WebhookController {
+  @Use(requireApiKey())
+  @Post("/stripe")
+  handleStripe(context: RouteContext) {
+    return { received: true };
+  }
+}
+```
+
+**6. Error boundary** — catch anything a handler throws and turn it into a structured 500
+instead of an unhandled-exception page:
+
+```ts
+app.use(async (context, next) => {
+  try {
+    return await next();
+  } catch (err) {
+    console.error(err);
+    return Response.InternalServerError(
+      process.env.NODE_ENV === "production" ? "Something went wrong" : String(err)
+    );
+  }
+});
+```
+
+**7. Request body size limit:**
+
+```ts
+app.use(async (context, next) => {
+  const length = Number(context.request.headers.get("content-length") ?? 0);
+  if (length > 5 * 1024 * 1024) {
+    return Response.BadRequest("Request body too large (max 5MB)");
+  }
+  return next();
+});
+```
+
+**8. Response caching headers**, per route:
+
+```ts
+@Controller("/posts")
+export class PostController {
+  @Use(async (context, next) => {
+    const response = await next();
+    response.headers.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    return response;
+  })
+  @Get("")
+  list() {
+    return { posts: [] };
+  }
+}
+```
+
+**9. IP allowlist** (internal/admin-only endpoints):
+
+```ts
+const ALLOWED_IPS = new Set(["10.0.0.1", "10.0.0.2"]);
+
+@Controller("/internal")
+export class InternalController {
+  @Use(async (context, next) => {
+    const ip = context.request.headers.get("x-forwarded-for");
+    if (!ip || !ALLOWED_IPS.has(ip)) return Response.Forbidden();
+    return next();
+  })
+  @Get("/metrics")
+  metrics() {
+    return { uptime: process.uptime() };
+  }
+}
+```
+
+**10. Request ID / correlation ID** — attach one to every request for log tracing across
+services:
+
+```ts
+app.use(async (context, next) => {
+  const requestId = context.request.headers.get("x-request-id") ?? crypto.randomUUID();
+  const response = await next();
+  response.headers.set("x-request-id", requestId);
+  return response;
+});
+```
+
 ### Application configuration
 
 ```ts
@@ -304,9 +584,11 @@ createApplication({
 
 A controller method can return:
 
-- A plain value — serialized with `NextResponse.json(value)`.
-- A `Response`/`NextResponse` instance — returned as-is. Use
-  `context.json(value, { status: 201 })` for a custom status code or headers.
+- A plain value — serialized with `NextResponse.json(value)` (status 200).
+- A plain object with a `statusCode` field — e.g. anything from the
+  [`Response` helper](#response-helper) — serialized with that status code applied.
+- A `NextResponse` instance — returned as-is. Use `context.json(value, { status: 201 })` for
+  a custom status code or headers when you'd rather build it by hand.
 
 ## OpenAPI / Swagger docs
 
@@ -385,6 +667,8 @@ Visit `/api-docs` for the UI, `/api/openapi.json` for the raw document.
 | `@All(path?)` | method | Bind a method to every HTTP verb. |
 | `@Use(middleware)` | method | Attach middleware to a single route. |
 | `@Body(DtoClass)` | parameter | Parse + validate the JSON body, inject the DTO instance. |
+| `@AuthGuard(roles?)` | method | Require an authenticated (and optionally role-matching) user; 401/403 otherwise. |
+| `@CurrentUser()` | parameter | Inject the resolved auth user (or `null`); never blocks on its own. |
 | `@ApiTags(...tags)` | class | Group a controller's routes under a tag in the OpenAPI doc. |
 | `@ApiOperation({ summary?, description? })` | method | Human-readable summary/description for a route. |
 | `@ApiResponse({ status, description, type?, isArray? })` | method | Document a possible response (repeatable). |
@@ -394,6 +678,7 @@ Visit `/api-docs` for the UI, `/api/openapi.json` for the raw document.
 | Export | Signature | Description |
 | --- | --- | --- |
 | `createApplication` | `(options: ApplicationOptions) => NextJsApp` | Builds the router that dispatches to your registered controllers. |
+| `configureAuth` | `(options: { resolveUser }) => void` | Registers the resolver `@AuthGuard`/`@CurrentUser` use to turn a request into a user. Call once, before any request is handled. |
 | `generateOpenApiDocument` | `(options?: GenerateOpenApiDocumentOptions) => object` | Builds an OpenAPI 3.0 document from your decorator metadata. |
 | `createSwaggerUiHandler` | `(options?: SwaggerUiOptions) => RouteHandler` | Returns a `GET` handler that serves the Swagger UI + its static assets. |
 | `registerController` | `(app: NextJsApp, ControllerClass) => void` | Lower-level primitive `createApplication` uses internally. |
@@ -402,24 +687,47 @@ Visit `/api-docs` for the UI, `/api/openapi.json` for the raw document.
 
 `RouteContext`, `NextJsApp`, `Middleware`, `RouteHandler`, `ApplicationOptions`,
 `RouteDefinition`, `RouteMiddleware`, `ApiOperationMeta`, `ApiResponseMeta`,
-`GenerateOpenApiDocumentOptions`, `SwaggerUiOptions` are all exported for consumers who
-want to type their own helpers around them.
+`GenerateOpenApiDocumentOptions`, `SwaggerUiOptions`, `ResolveUser`, `ConfigureAuthOptions`
+are all exported for consumers who want to type their own helpers around them.
 
 ### `Response` helper
 
-A small set of response-shape helpers used internally by `@Body()` validation failures,
-also available for your own handlers:
+A full set of structured, professional response-shape helpers — used internally by
+`@Body()` validation failures, and available for your own handlers. Every method returns a
+plain object with a `statusCode` field; when returned directly from a controller method
+(API-route path), the router reads `statusCode` and sets the **real HTTP status** on the
+response automatically — no manual `context.json(body, { status })` needed:
 
 ```ts
 import { Response } from "nextjs-nestapi";
 
-Response.NotFound();               // { success: false, message: "Not Found" }
-Response.Unauthorized();           // { success: false, message: "Unauthorized" }
-Response.Forbidden();              // { success: false, message: "Forbidden" }
-Response.ValidationFailed(errors); // { success: false, message: "Validation failed", errors }
-Response.EmptyPage();              // paginated-list shape with an empty data array
-Response.BadPage(message);         // paginated-list shape signalling an invalid page
+@Get("/:id")
+getOne(context: RouteContext) {
+  const post = db.find(context.params.id);
+  if (!post) return Response.NotFound("Post not found"); // -> HTTP 404
+  return Response.Ok(post);                              // -> HTTP 200
+}
 ```
+
+| Method | HTTP status | Shape |
+| --- | --- | --- |
+| `Response.Ok(data?, message?)` | 200 | `{ success: true, statusCode, message, data }` |
+| `Response.Created(data?, message?)` | 201 | `{ success: true, statusCode, message, data }` |
+| `Response.NoContent(message?)` | 204 | `{ success: true, statusCode, message }` |
+| `Response.BadRequest(message?)` | 400 | `{ success: false, statusCode, message }` |
+| `Response.ValidationFailed(errors, message?)` | 400 | `{ success: false, statusCode, message, errors }` |
+| `Response.Unauthorized(message?)` | 401 | `{ success: false, statusCode, message }` |
+| `Response.Forbidden(message?)` | 403 | `{ success: false, statusCode, message }` |
+| `Response.NotFound(message?)` | 404 | `{ success: false, statusCode, message }` |
+| `Response.Conflict(message?)` | 409 | `{ success: false, statusCode, message }` |
+| `Response.TooManyRequests(message?)` | 429 | `{ success: false, statusCode, message }` |
+| `Response.InternalServerError(message?)` | 500 | `{ success: false, statusCode, message }` |
+| `Response.BadPage(message)` | 400 | paginated-list shape signalling an invalid page |
+| `Response.EmptyPage()` | 200 | paginated-list shape with an empty `data` array |
+
+The same helpers work from a [Server Action](#server-action-validation) too — there's no
+real HTTP status to set outside a route, so `statusCode` just stays informational and the
+caller branches on `result.success` instead.
 
 ## Project structure
 
@@ -452,8 +760,11 @@ src/
 - **No dependency-injection container.** Controllers are plain classes; construct their
   dependencies yourself (constructor defaults, a service locator, whatever your app
   already uses).
-- **No modules/guards/pipes/interceptors.** The decorator surface intentionally covers
-  routing, DTO validation, and middleware — not the full NestJS feature set.
+- **No modules/pipes/interceptors, and one auth guard, not a guard system.** The decorator
+  surface intentionally covers routing, DTO validation, middleware, and a single
+  `@AuthGuard`/`configureAuth` mechanism — not the full NestJS feature set.
+- **No route-specificity resolution.** Routes match in declaration order, first match wins
+  — see [Controllers & routing](#controllers--routing).
 
 ## Example project
 

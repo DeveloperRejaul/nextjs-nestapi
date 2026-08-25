@@ -13,7 +13,7 @@
     "class-validator": "^0.15.1",
     "class-validator-jsonschema": "^5.1.0",
     "next": "16.3.2",
-    "nextjs-nestapi": "file:../nextjs-nestapi-61af67c73a.tgz",
+    "nextjs-nestapi": "file:../nextjs-nestapi-66f7e2c4ec.tgz",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "swagger-ui-dist": "^5.32.14"

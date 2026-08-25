@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { registerController } from "./register";
+import { buildRouteResponse } from "./Response";
+import { composeMiddlewares } from "./compose";
 import { ApplicationOptions, NextJsApp, RouteContext } from "./types";
 
 function normalizePath(path: string) {
@@ -74,22 +76,24 @@ export function createApplication(options: ApplicationOptions) {
         ? pathname.slice(this.basePath.length) || "/"
         : pathname;
 
-      const matchedRoute = this.routes.find((route) => {
-        const methodMatches =
-          route.method === "*" || route.method === request.method;
+      let matchedRoute: (typeof this.routes)[number] | undefined;
+      let params: Record<string, string> = {};
 
-        if (!methodMatches) {
-          return false;
+      for (const route of this.routes) {
+        const methodMatches = route.method === "*" || route.method === request.method;
+        if (!methodMatches) continue;
+
+        const matchedParams = matchRoute(route.path, normalizedPath);
+        if (matchedParams) {
+          matchedRoute = route;
+          params = matchedParams;
+          break;
         }
-
-        return matchRoute(route.path, normalizedPath) !== null;
-      });
+      }
 
       if (!matchedRoute) {
         return NextResponse.json({ message: "Not Found" }, { status: 404 });
       }
-
-      const params = matchRoute(matchedRoute.path, normalizedPath) || {};
       const context: RouteContext = {
         request,
         params,
@@ -104,23 +108,16 @@ export function createApplication(options: ApplicationOptions) {
           return result as NextResponse;
         }
 
-        return context.json(result);
+        return buildRouteResponse(context, result);
       };
 
-      const composed = this.middlewares.reduceRight<() => Promise<NextResponse | Response | any>>(
-        (next, middleware) => {
-          return async () => middleware(context, next);
-        },
-        executeHandler
-      );
-
-      const result = await composed();
+      const result = await composeMiddlewares(context, this.middlewares, executeHandler)();
 
       if (result instanceof Response) {
         return result as NextResponse;
       }
 
-      return context.json(result);
+      return buildRouteResponse(context, result);
     },
   };
 

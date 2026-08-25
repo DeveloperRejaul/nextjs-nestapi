@@ -29,7 +29,7 @@ function hasFlag(args: string[], flag: string): boolean {
 
 function printResults(results: { file: string; status: string }[]) {
   for (const r of results) {
-    const marker = r.status === "written" ? "created" : r.status === "registered" ? "updated" : r.status;
+    const marker = r.status === "written" ? "created" : r.status;
     console.log(`  ${marker === "skipped" ? "skip  " : "create"} ${r.file}${marker === "skipped" ? " (already exists)" : ""}`);
   }
 }

@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
 import { controllerRegistry } from "../decorators/controller";
-import { routeRegistry, type RouteMiddleware } from "../decorators/route";
+import { routeRegistry } from "../decorators/route";
+import { buildRouteResponse } from "./Response";
+import { composeMiddlewares } from "./compose";
 import type { NextJsApp, RouteContext } from "./types";
 
 export function registerController(
@@ -28,23 +29,10 @@ export function registerController(
           return result;
         }
 
-        return c.json(result);
+        return buildRouteResponse(c, result);
       };
 
-      if (route.middlewares?.length) {
-        const composedRoute = route.middlewares.reduceRight<
-          () => Promise<NextResponse | Response | any>
-        >(
-          (next, middleware: RouteMiddleware) => {
-            return async () => middleware(c, next);
-          },
-          executeController
-        );
-
-        return composedRoute();
-      }
-
-      return executeController();
+      return composeMiddlewares(c, route.middlewares, executeController)();
     };
 
     if (route.method === "*") {
