@@ -1,0 +1,104 @@
+{
+  "name": "nextjs-nestapi",
+  "version": "1.0.0",
+  "description": "Write Next.js App Router API routes in NestJS style: decorator-based controllers, DTO validation, and auto-generated OpenAPI/Swagger docs.",
+  "scripts": {
+    "build": "rm -rf dist && tsup && chmod +x dist/cli.js",
+    "test": "npm run build && npm link",
+    "dev": "ts-node ./src/index.ts"
+  },
+  "bin": {
+    "nextjs-nestapi": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "directories": {
+    "dist": "dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeveloperRejaul/nextjs-nestapi.git"
+  },
+  "author": "Rejaul Karim",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/DeveloperRejaul/nextjs-nestapi/issues"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^19.1.16",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "class-validator-jsonschema": "^5.1.0",
+    "next": "^16.3.2",
+    "react": "^19.1.1",
+    "swagger-ui-dist": "^5.32.14",
+    "ts-node": "^10.9.2",
+    "tslib": "^2.7.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.2"
+  },
+  "peerDependencies": {
+    "class-transformer": "*",
+    "class-validator": "*",
+    "class-validator-jsonschema": "*",
+    "next": "*",
+    "react": "*",
+    "swagger-ui-dist": "*"
+  },
+  "peerDependenciesMeta": {
+    "class-transformer": {
+      "optional": true
+    },
+    "class-validator": {
+      "optional": true
+    },
+    "class-validator-jsonschema": {
+      "optional": true
+    },
+    "swagger-ui-dist": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "nestjs-nestapi",
+    "nestjsapi",
+    "nestapi",
+    "nextjs",
+    "nextapi",
+    "nextjsapi",
+    "nestjs",
+    "next",
+    "nest",
+    "nextapi",
+    "restapi",
+    "api",
+    "server",
+    "app-router",
+    "route-handlers",
+    "decorators",
+    "controller",
+    "dto",
+    "class-validator",
+    "openapi",
+    "swagger",
+    "typescript",
+    "cli",
+    "scaffolding",
+    "generator"
+  ]
+}
