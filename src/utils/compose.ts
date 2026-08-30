@@ -2,12 +2,17 @@ type Executor<T> = () => Promise<T>;
 type MiddlewareLike<T> = (context: any, next: Executor<T>) => Promise<T> | T;
 
 /*
- * Wraps `execute` in a reduceRight-composed onion of middlewares —
- * shared by register.ts (per-route @Use/@AuthGuard) and
- * createApplication.ts (app-level app.use()), which otherwise
- * duplicated this exact composition. `execute` itself stays
- * responsible for turning its own result into a real Response (see
- * buildRouteResponse in Response.ts) — this helper only handles the
+ * Wraps `execute` in a reduceRight-composed onion of middlewares. Called
+ * from exactly one place — decorators/param-registry.ts's
+ * wireControllerMethods() — which composes both the app-level app.use()
+ * chain and a method's own @Use()/@AuthGuard() chain around that
+ * method's parameter resolution and body, on the method itself. That's
+ * what makes the middleware chain run identically for a real route call
+ * (dispatched through app.handle()) and a controller method bound and
+ * called directly as a Server Action, neither of which goes through a
+ * second, router-dispatch-level composition anymore. `execute` itself
+ * stays responsible for turning its own result into a real Response
+ * (see buildRouteResponse in Response.ts) — this helper only handles the
  * wrapping, so a middleware that short-circuits via `return next()`
  * still sees an already-finalized response from the layer below it.
  */

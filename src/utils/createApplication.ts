@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { registerController } from "./register";
 import { buildRouteResponse } from "./Response";
-import { composeMiddlewares } from "./compose";
+import { getGlobalMiddlewares, registerGlobalMiddleware } from "./global-middleware";
 import { ApplicationOptions, NextJsApp, RouteContext } from "./types";
 
 function normalizePath(path: string) {
@@ -50,10 +50,18 @@ function matchRoute(
 export function createApplication(options: ApplicationOptions) {
   const app: NextJsApp = {
     routes: [],
-    middlewares: [],
+    /*
+     * Backed by the same global array wireControllerMethods() reads
+     * (see utils/global-middleware.ts) — not per-instance state. A
+     * controller method bound and called directly as a Server Action has
+     * no reference to this `app` object, so app-level middleware has to
+     * live somewhere both call shapes can reach; this field just mirrors
+     * that shared list for introspection.
+     */
+    middlewares: getGlobalMiddlewares(),
     basePath: options.basePath ?? "/api",
     use(middleware) {
-      this.middlewares.push(middleware);
+      registerGlobalMiddleware(middleware);
     },
     on(method, path, handler) {
       this.routes.push({
@@ -101,17 +109,12 @@ export function createApplication(options: ApplicationOptions) {
         json: (body, init) => NextResponse.json(body, init),
       };
 
-      const executeHandler = async () => {
-        const result = await matchedRoute.handler(context);
-
-        if (result instanceof Response) {
-          return result as NextResponse;
-        }
-
-        return buildRouteResponse(context, result);
-      };
-
-      const result = await composeMiddlewares(context, this.middlewares, executeHandler)();
+      /*
+       * Middleware (app-level app.use() and this route's own @Use())
+       * already runs as part of calling matchedRoute.handler itself —
+       * see register.ts and param-registry.ts's wireControllerMethods().
+       */
+      const result = await matchedRoute.handler(context);
 
       if (result instanceof Response) {
         return result as NextResponse;

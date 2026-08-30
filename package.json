@@ -1,10 +1,11 @@
 {
   "name": "nextjs-nestapi",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Write Next.js App Router API routes in NestJS style: decorator-based controllers, DTO validation, and auto-generated OpenAPI/Swagger docs.",
   "scripts": {
     "build": "rm -rf dist && tsup && chmod +x dist/cli.js",
     "test": "npm run build && npm link",
+    "test:smoke": "npm run build && ts-node --transpile-only -O \"{\\\"module\\\":\\\"commonjs\\\",\\\"experimentalDecorators\\\":true,\\\"emitDecoratorMetadata\\\":true,\\\"esModuleInterop\\\":true}\" test/auth-middleware.route.test.ts && ts-node --transpile-only -O \"{\\\"module\\\":\\\"commonjs\\\",\\\"experimentalDecorators\\\":true,\\\"emitDecoratorMetadata\\\":true,\\\"esModuleInterop\\\":true}\" test/auth-middleware.action.test.ts",
     "dev": "ts-node ./src/index.ts"
   },
   "bin": {

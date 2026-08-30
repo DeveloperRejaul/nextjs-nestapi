@@ -14,6 +14,12 @@ export interface RouteContext {
   params: Record<string, string>;
   query: URLSearchParams;
   json: (body: any, init?: ResponseInit) => NextResponse;
+  /*
+   * Not set by the library itself — a middleware (app-level app.use() or
+   * a per-method @Use()/@AuthGuard()) is expected to set this, and
+   * @CurrentUser() reads it back. See decorators/param-registry.ts.
+   */
+  user?: unknown;
 }
 
 export type Middleware = (

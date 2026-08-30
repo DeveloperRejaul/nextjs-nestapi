@@ -1,22 +1,23 @@
 import { Response } from "../utils/Response";
-import { resolveCurrentUser } from "../utils/auth";
-import type { RouteContext } from "../utils/types";
 import { Use } from "./route";
 
 /*
- * Sugar over @Use() — not a separate dispatch mechanism. Reusing the
- * existing middleware chain means @AuthGuard() runs (and can
- * short-circuit) before the route's @Body()/@CurrentUser() parameter
- * resolvers ever start, since @Use middlewares wrap the whole handler
- * call in register.ts, not just the handler body.
+ * Sugar over @Use() — not a separate dispatch mechanism, and not a
+ * resolver either. It assumes some earlier middleware in the chain (an
+ * app-level app.use(), typically) already resolved the caller and set
+ * `context.user` — this decorator only guards on that value, the same
+ * way any other @Use() middleware would, so it runs (and can
+ * short-circuit) before this method's @Body()/@CurrentUser() parameter
+ * resolvers, and identically for a real route call or a directly-bound
+ * Server Action call — see decorators/param-registry.ts.
  *
- * AuthGuard() — must resolve a user, any role.
- * AuthGuard(['ADMIN', 'EDITOR']) — must resolve a user AND have one
- * of the listed roles (read from `user.role`).
+ * AuthGuard() — must have a resolved user, any role.
+ * AuthGuard(['ADMIN', 'EDITOR']) — must have a resolved user AND have
+ * one of the listed roles (read from `user.role`).
  */
 export function AuthGuard(roles?: string[]): MethodDecorator {
-  return Use(async (context: RouteContext, next) => {
-    const user = (await resolveCurrentUser(context)) as { role?: string } | null;
+  return Use((context: any, next) => {
+    const user = context?.user as { role?: string } | null | undefined;
 
     if (!user) {
       return Response.Unauthorized();

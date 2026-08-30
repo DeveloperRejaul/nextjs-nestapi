@@ -21,8 +21,6 @@ export type { ApiOperationMeta, ApiResponseMeta } from "./decorators/openapi-reg
 export { createApplication } from "./utils/createApplication";
 export { registerController } from "./utils/register";
 export { Response } from "./utils/Response";
-export { configureAuth } from "./utils/auth";
-export type { ResolveUser, ConfigureAuthOptions } from "./utils/auth";
 export type {
   ApplicationOptions,
   RouteHandler,

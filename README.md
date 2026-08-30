@@ -53,8 +53,8 @@ framework running alongside Next.js. One catch-all route dispatches to plain
 
 - **Decorator-based routing** — `@Controller`, `@Get`/`@Post`/`@Put`/`@Patch`/`@Delete`/`@Head`/`@Options`/`@All`, with Express-style `:param` path segments.
 - **DTO validation** — `@Body(DtoClass)` parses and validates the JSON request body with `class-validator`/`class-transformer`, and returns a structured validation-error response automatically on failure.
-- **Authentication guards** — `@AuthGuard(roles?)` + `@CurrentUser()`, backed by one `configureAuth({ resolveUser })` call — no bundled strategy, no DI container.
-- **Middleware** — global (`app.use`) and per-route (`@Use`), composed around the handler in order.
+- **Authentication guards** — `@AuthGuard(roles?)` + `@CurrentUser()`, backed entirely by `@Use()` middleware setting `context.user` — no bundled strategy, no DI container.
+- **Middleware** — global (`app.use`) and per-route (`@Use`), composed around the handler in order, for both a real route call and a directly-bound Server Action call.
 - **One catch-all route** — a single `app/api/[[...route]]/route.ts` dispatches to every controller; no per-endpoint route files to maintain.
 - **OpenAPI / Swagger docs** — `@ApiTags`/`@ApiOperation`/`@ApiResponse` plus `generateOpenApiDocument()` build a spec straight from your decorators and DTOs; `createSwaggerUiHandler()` serves the Swagger UI from your own `node_modules` — no vendored assets, no CDN.
 - **CLI scaffolding** — `nextjs-nestapi new`, `init`, and `generate controller` bootstrap a project or add a feature without hand-writing boilerplate.
@@ -314,26 +314,32 @@ resolves correctly when Next.js invokes it as a Server Action.
 ### Authentication guards
 
 `@AuthGuard()` and `@CurrentUser()` — NestJS-style route protection, without a DI container
-or a bundled auth strategy. Register **one** resolver, once, telling the library how to turn
-a request into a user; the library handles the 401/403 short-circuiting and the injection:
+or a bundled auth strategy. There's no separate resolver hook to register; auth is just
+`@Use()` middleware that sets `context.user`, the same mechanism as any other middleware in
+this library. Set it once, at the app level, and it runs before **every** controller method —
+dispatched as a real route, or bound and called directly as a Server Action:
 
 ```ts
 // app.ts
-import { configureAuth } from "nextjs-nestapi";
+import { createApplication } from "nextjs-nestapi";
 import jwt from "jsonwebtoken";
 
-configureAuth({
-  resolveUser: async (context) => {
-    const token = context.request.headers.get("authorization")?.replace("Bearer ", "");
-    if (!token) return null;
+export const app = createApplication({ controllers: [OrderController] });
 
-    try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET!) as { id: string; role: string };
-      return payload; // becomes the object @CurrentUser() injects
-    } catch {
-      return null;
-    }
-  },
+app.use(async (context, next) => {
+  const token = context.request?.headers.get("authorization")?.replace("Bearer ", "");
+  if (!token) {
+    context.user = null;
+    return next();
+  }
+
+  try {
+    context.user = jwt.verify(token, process.env.JWT_SECRET!) as { id: string; role: string };
+  } catch {
+    context.user = null;
+  }
+
+  return next();
 });
 ```
 
@@ -358,14 +364,20 @@ export class OrderController {
 }
 ```
 
-- No `resolveUser` call → `Response.Unauthorized()` (HTTP 401), handler never runs.
+- No `context.user` set (or `null`) → `Response.Unauthorized()` (HTTP 401), handler never runs.
 - Resolved user's `role` isn't in the list → `Response.Forbidden()` (HTTP 403).
-- `@AuthGuard()` is sugar over [`@Use`](#middleware) — it runs as part of the same middleware
-  chain, before `@Body`/`@CurrentUser` parameter resolution starts.
-- `@CurrentUser()` reuses the same request's already-resolved user instead of calling
-  `resolveUser` a second time when both decorators are on the same method; used alone
-  (no `@AuthGuard`) it never blocks — it resolves to `null` for anonymous requests, for
+- `@AuthGuard()` is sugar over [`@Use`](#middleware) — it just checks `context.user`/`.role`,
+  the same value your app-level middleware set. It runs as part of the same middleware chain,
+  before `@Body`/`@CurrentUser` parameter resolution starts.
+- `@CurrentUser()` reads `context.user` — it doesn't resolve anything itself, so it works
+  identically whether the method is dispatched as a real route or bound and called directly as
+  a Server Action (see [Server Action validation](#server-action-validation)). Used alone (no
+  `@AuthGuard`) it never blocks — it resolves to `null` when no middleware set a user, for
   routes where login is optional.
+- `context.request` only exists for a real route call — a directly-bound Server Action call
+  gets a minimal synthetic context instead. A middleware that needs to resolve identity in
+  both call shapes should prefer Next.js's `next/headers` (`cookies()`/`headers()`), which
+  work the same way in either case without touching `context` at all.
 
 ### Middleware
 
@@ -677,8 +689,7 @@ Visit `/api-docs` for the UI, `/api/openapi.json` for the raw document.
 
 | Export | Signature | Description |
 | --- | --- | --- |
-| `createApplication` | `(options: ApplicationOptions) => NextJsApp` | Builds the router that dispatches to your registered controllers. |
-| `configureAuth` | `(options: { resolveUser }) => void` | Registers the resolver `@AuthGuard`/`@CurrentUser` use to turn a request into a user. Call once, before any request is handled. |
+| `createApplication` | `(options: ApplicationOptions) => NextJsApp` | Builds the router that dispatches to your registered controllers. `app.use()` registers auth/other middleware — see [Authentication guards](#authentication-guards). |
 | `generateOpenApiDocument` | `(options?: GenerateOpenApiDocumentOptions) => object` | Builds an OpenAPI 3.0 document from your decorator metadata. |
 | `createSwaggerUiHandler` | `(options?: SwaggerUiOptions) => RouteHandler` | Returns a `GET` handler that serves the Swagger UI + its static assets. |
 | `registerController` | `(app: NextJsApp, ControllerClass) => void` | Lower-level primitive `createApplication` uses internally. |
@@ -687,7 +698,7 @@ Visit `/api-docs` for the UI, `/api/openapi.json` for the raw document.
 
 `RouteContext`, `NextJsApp`, `Middleware`, `RouteHandler`, `ApplicationOptions`,
 `RouteDefinition`, `RouteMiddleware`, `ApiOperationMeta`, `ApiResponseMeta`,
-`GenerateOpenApiDocumentOptions`, `SwaggerUiOptions`, `ResolveUser`, `ConfigureAuthOptions`
+`GenerateOpenApiDocumentOptions`, `SwaggerUiOptions`
 are all exported for consumers who want to type their own helpers around them.
 
 ### `Response` helper
@@ -762,7 +773,12 @@ src/
   already uses).
 - **No modules/pipes/interceptors, and one auth guard, not a guard system.** The decorator
   surface intentionally covers routing, DTO validation, middleware, and a single
-  `@AuthGuard`/`configureAuth` mechanism — not the full NestJS feature set.
+  `@Use()`-backed `@AuthGuard` mechanism — not the full NestJS feature set.
+- **One global middleware chain, no per-app isolation.** `app.use()` middleware is shared
+  process-wide (see [Authentication guards](#authentication-guards)) so it can reach a
+  directly-bound Server Action call, which has no reference to any particular `NextJsApp`
+  instance. Registering multiple independent `createApplication()` apps in the same process
+  with different app-level middleware isn't supported.
 - **No route-specificity resolution.** Routes match in declaration order, first match wins
   — see [Controllers & routing](#controllers--routing).
 
